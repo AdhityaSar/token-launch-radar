@@ -76,6 +76,6 @@ const dossier = buildDossier(outDir, {
 writeFileSync(join(outDir, 'dossier.json'), dossier);
 
 process.stdout.write(
-  `token-launch-radar: ${dataset.universe.board_count} pre-token rows (${dataset.universe.watchlist_count} watchlist, ${dataset.universe.early_count} early) calibrated from ${dataset.calibration.live_peer_count} live comps (median ${dataset.calibration.global_median}x)\n` +
+  `token-launch-radar: ${dataset.universe.board_count}/${dataset.universe.total_protocols} pre-token (${dataset.universe.watchlist_count} watchlist, ${dataset.universe.early_count} early), ${dataset.universe.live_total_count} live separated, LOO x${dataset.validation.loo_median_mult_err} vs naive x${dataset.validation.loo_naive_mult_err}, WF x${dataset.validation.wf_median_mult_err}\n` +
     `token-launch-radar: wrote board.json, data.js, dashboard (${dashFiles.length} files), screenshots (${shotFiles.length} images), dossier.json (${Buffer.byteLength(dossier)} bytes)\n`,
 );
