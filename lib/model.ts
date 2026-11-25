@@ -40,6 +40,7 @@ export interface AblationRow {
   label: string;
   loo_mult_err: number;
   loo_mae_log: number;
+  wf_mult_err: number;
   delta_vs_naive_pct: number;
 }
 
@@ -204,7 +205,7 @@ export interface RadarDataset {
   live: LivePeerRow[];
 }
 
-export const MODEL_VERSION = 'radar-v4-oos-verified';
+export const MODEL_VERSION = 'radar-v5-clean-oos';
 
 const DAY_MS = 86_400_000;
 const RIDGE_LAMBDA = 3.0;
@@ -213,7 +214,7 @@ const TVL_CENTER = 18.0;
 const AGE_CENTER = 0.7;
 
 const EXCLUDED_CATEGORIES = new Set([
-  'Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX',
+  'Bridge', 'Canonical Bridge', 'Cross Chain Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX',
 ]);
 const EXCHANGE_PREFIXES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX', 'Bitfinex', 'Gemini'];
 const VERSION_SUFFIX = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
@@ -388,7 +389,7 @@ export function fitValuationModel(snapshot: Snapshot): {
       if (hasTok) sc.token += 1;
       sectorCounts.set(cat, sc);
     }
-    if (isPreToken(p) || p.category === 'CEX') continue;
+    if (isPreToken(p) || (p.category !== null && EXCLUDED_CATEGORIES.has(p.category))) continue;
     if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
     const ratio = p.mcap_usd / p.tvl_usd;
     if (ratio < 0.005 || ratio > 10.0) continue;
@@ -420,7 +421,25 @@ export function fitValuationModel(snapshot: Snapshot): {
   const naiveMedMult = Math.exp(quantile([...naiveAbs].sort((a, b) => a - b), 0.5));
   const naiveMae = naiveAbs.reduce((s, v) => s + v, 0) / Math.max(1, naiveAbs.length);
 
-  // Term-by-term LOO ablation
+  // Walk-Forward helper (older 65% -> newer 35% by listed_at)
+  const dated = points
+    .filter((p) => p.listed_at !== null)
+    .sort((a, b) => (a.listed_at! < b.listed_at! ? -1 : a.listed_at! > b.listed_at! ? 1 : a.slug.localeCompare(b.slug)));
+  const split = Math.floor(dated.length * 0.65);
+  const wfTrain = dated.slice(0, split);
+  const wfTest = dated.slice(split);
+  const wfNaiveAbs = wfTest.map((t) => Math.abs(t.lmcap - Math.log(0.25 * t.tvl_usd))).sort((a, b) => a - b);
+  const wfNaiveMult = Math.exp(quantile(wfNaiveAbs, 0.5));
+
+  const evalWfSubset = (cols: number[], useCat: boolean): number => {
+    const m = fitSubset(wfTrain, cols, RIDGE_LAMBDA, useCat, SECTOR_SHRINKAGE_K);
+    const errs = wfTest
+      .map((t) => Math.abs(t.lmcap - (dot(m.w, cols.map((c) => t.features[c]!)) + (useCat ? (m.catAdj.get(t.category) ?? 0) : 0))))
+      .sort((a, b) => a - b);
+    return Math.exp(quantile(errs, 0.5));
+  };
+
+  // Term-by-term LOO + Walk-Forward ablation
   const abSpecs: Array<{ label: string; cols: number[]; cat: boolean }> = [
     { label: 'Power-Law TVL only', cols: [0, 1], cat: false },
     { label: '+ Sector EB Shrinkage', cols: [0, 1], cat: true },
@@ -428,37 +447,30 @@ export function fitValuationModel(snapshot: Snapshot): {
     { label: 'Full Ridge (+ Chains)', cols: [0, 1, 2, 3, 4], cat: true },
   ];
   const ablation: AblationRow[] = [
-    { label: 'Naive 0.25 × TVL', loo_mult_err: round2(naiveMedMult), loo_mae_log: round4(naiveMae), delta_vs_naive_pct: 0 },
+    { label: 'Naive 0.25 × TVL', loo_mult_err: round2(naiveMedMult), loo_mae_log: round4(naiveMae), wf_mult_err: round2(wfNaiveMult), delta_vs_naive_pct: 0 },
   ];
   let fullLoo = { medMult: naiveMedMult, mae: naiveMae, signedRes: [] as number[] };
+  let wfMedMult = wfNaiveMult;
   for (const sp of abSpecs) {
     const r = evalLooSubset(points, sp.cols, sp.cat);
+    const wfE = evalWfSubset(sp.cols, sp.cat);
     ablation.push({
       label: sp.label,
       loo_mult_err: round2(r.medMult),
       loo_mae_log: round4(r.mae),
+      wf_mult_err: round2(wfE),
       delta_vs_naive_pct: round2(((naiveMedMult - r.medMult) / naiveMedMult) * 100),
     });
-    if (sp.cols.length === 5 && sp.cat) fullLoo = r;
+    if (sp.cols.length === 5 && sp.cat) {
+      fullLoo = r;
+      wfMedMult = wfE;
+    }
   }
 
   const sortedSigned = [...fullLoo.signedRes].sort((a, b) => a - b);
   const q25 = quantile(sortedSigned, 0.25);
   const q75 = quantile(sortedSigned, 0.75);
   const insideConformal = fullLoo.signedRes.filter((r) => r >= q25 && r <= q75).length;
-
-  // Walk-Forward blind test (older 65% -> newer 35%)
-  const dated = points
-    .filter((p) => p.listed_at !== null)
-    .sort((a, b) => (a.listed_at! < b.listed_at! ? -1 : a.listed_at! > b.listed_at! ? 1 : a.slug.localeCompare(b.slug)));
-  const split = Math.floor(dated.length * 0.65);
-  const wfTrain = dated.slice(0, split);
-  const wfTest = dated.slice(split);
-  const wfModel = fitSubset(wfTrain, allCols, RIDGE_LAMBDA, true, SECTOR_SHRINKAGE_K);
-  const wfAbs = wfTest.map((t) => Math.abs(t.lmcap - (dot(wfModel.w, t.features) + (wfModel.catAdj.get(t.category) ?? 0)))).sort((a, b) => a - b);
-  const wfNaiveAbs = wfTest.map((t) => Math.abs(t.lmcap - Math.log(0.25 * t.tvl_usd))).sort((a, b) => a - b);
-  const wfMedMult = Math.exp(quantile(wfAbs, 0.5));
-  const wfNaiveMult = Math.exp(quantile(wfNaiveAbs, 0.5));
 
   const allCats = new Set([...rawMultByCat.keys(), ...sectorCounts.keys()]);
   const categories: Record<string, CategoryEffect> = {};

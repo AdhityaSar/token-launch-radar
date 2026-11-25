@@ -30,8 +30,7 @@
   const ch = Math.min(Math.log(Math.max(1, chainCount)), 2.5);
   return [1, lt, g, a, ch];
  }
- /** Closed-form Ridge regression (regularizing slopes, never intercept) verified live on DATA.live. */
- function solveRidge(X, y, lambda) {
+  function solveRidge(X, y, lambda) {
   const d = X[0].length;
   const A = Array.from({ length: d }, () => Array(d).fill(0));
   const b = Array(d).fill(0);
@@ -62,8 +61,7 @@
   }
   return w;
  }
- /** Re-fits Ridge + Sector Empirical-Bayes shrinkage live from DATA.live so sandbox & OOS checks are 100% transparent. */
- function fitLiveModel(livePeers, lambda, catK) {
+  function fitLiveModel(livePeers, lambda, catK) {
   const pts = livePeers.map((p) => ({
    cat: p.category || 'Other',
    tvl: p.tvl_usd,
@@ -92,8 +90,7 @@
    catAdj,
   };
  }
- /** Live Leave-One-Out verification on DATA.live (matches lib/model.ts identically). */
- function verifyLooInBrowser(livePeers, lambda, catK) {
+  function verifyLooInBrowser(livePeers, lambda, catK) {
   const pts = livePeers.map((p) => ({
    cat: p.category || 'Other',
    lmcap: Math.log(p.mcap_usd),
@@ -111,8 +108,7 @@
   absErrs.sort((a, b) => a - b);
   return round2(Math.exp(quantile(absErrs, 0.5)));
  }
- /** Live Walk-Forward blind test (older 65% -> newer 35% by listed_at) verified directly on DATA.live. */
- function verifyWalkForwardInBrowser(livePeers, lambda, catK) {
+  function verifyWalkForwardInBrowser(livePeers, lambda, catK) {
   const dated = livePeers.filter((p) => p.listed_at).sort((a, b) => (a.listed_at < b.listed_at ? -1 : a.listed_at > b.listed_at ? 1 : a.slug.localeCompare(b.slug)));
   const split = Math.floor(dated.length * 0.65);
   const toPt = (p) => ({ cat: p.category || 'Other', lmcap: Math.log(p.mcap_usd), f: featureVector(p.tvl_usd, p.change_7d, p.age_days, p.chains.length) });
@@ -126,8 +122,7 @@
   }).sort((a, b) => a - b);
   return round2(Math.exp(quantile(errs, 0.5)));
  }
- /** Empirical token launch odds from snapshot sector token rates, TVL scale, and survival-adjusted age hazard. */
- function computeTokenOdds(row) {
+  function computeTokenOdds(row) {
   const cat = DATA.categories[row.category || 'Other'];
   const baseRate = cat ? cat.token_rate : DATA.global_token_rate;
   const tvlLift = clamp((Math.log10(Math.max(5e6, row.tvl_usd)) - 7.3) * 0.08, -0.06, 0.16);
@@ -164,8 +159,7 @@
  const fmtPct = (v) => (v === null || v === undefined || !Number.isFinite(v) ? 'N/A' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`);
  const fmtAge = (d) => (d === null || d === undefined ? 'N/A' : d >= 365 ? `${(d / 365).toFixed(1)}y` : `${d}d`);
  const fmtSigned = (v, digits) => `${v >= 0 ? '+ ' : '− '}${Math.abs(v).toFixed(digits)}`;
- /** Scores a protocol using the fitted Ridge power-law model, conformal band, and net-EV farm verdict. */
- function computeImpliedValue(row, w) {
+  function computeImpliedValue(row, w) {
   const f = featureVector(row.tvl_usd, row.change_7d, row.age_days, row.chains.length);
   const catKey = row.category || 'Other';
   const sectorAdj = LIVE_FIT.catAdj[catKey] ?? (DATA.categories[catKey]?.log_residual_adj ?? 0);
@@ -209,8 +203,7 @@
    verdict,
   };
  }
- /** Category-specific 6-step DeFi farm playbook matching lib/model.ts identically. */
- function buildFarmPlan(row) {
+  function buildFarmPlan(row) {
   const chains = row.chains || [];
   const lowFee = chains.find((c) => c !== 'Ethereum' && (L2_CHAINS.has(c) || ALT_L1_CHAINS.has(c)));
   const primary = lowFee || chains[0] || 'its primary chain';
@@ -526,23 +519,23 @@
   return `
    <section class="two-col">
     <div class="card">
-     <h2>Out-of-Sample Term Ablation &amp; Blind Walk-Forward (${v.live_fit_count} Live Comps)</h2>
-     <p>Both <code>solveRidge</code> and <code>verifyLooInBrowser</code> run live on <code>DATA.live</code> inside this page, confirming zero hardcoded weights and verifying LOO-CV ×${LIVE_LOO_ERR} against the naive 0.25×TVL baseline (×${v.loo_naive_mult_err}).</p>
+     <h2>Out-of-Sample Ablation &amp; Blind Walk-Forward (${v.live_fit_count} Clean DeFi Comps)</h2>
+     <p><code>solveRidge</code>, <code>verifyLooInBrowser</code> &amp; <code>verifyWalkForwardInBrowser</code> run live on <code>DATA.live</code> (bridges, LSTs &amp; CEXs excluded): LOO ×${LIVE_LOO_ERR} vs naive ×${v.loo_naive_mult_err}, Walk-Fwd ×${LIVE_WF_ERR}.</p>
      <div class="table-wrap" style="margin:8px 0 10px;border:1px solid var(--border);border-radius:var(--r-md)"><table>
-      <thead><tr><th>Model Specification (LOO-CV n=${v.live_fit_count})</th><th class="r">Median Err</th><th class="r">MAE(log)</th><th class="r">vs Naive</th></tr></thead>
+      <thead><tr><th>Model Spec (n=${v.live_fit_count} DeFi)</th><th class="r">LOO Err</th><th class="r">Walk-Fwd</th><th class="r">MAE</th><th class="r">vs Naive</th></tr></thead>
       <tbody>${v.ablation.map((a, idx) => `
        <tr style="${idx === v.ablation.length - 1 ? 'background:var(--emerald-dim)' : ''}">
         <td><b>${esc(a.label)}</b></td>
         <td class="r mono" style="color:${idx === v.ablation.length - 1 ? 'var(--emerald)' : 'var(--ink)'}">×${a.loo_mult_err.toFixed(2)}</td>
-        <td class="r mono">${a.loo_mae_log.toFixed(4)}</td>
-        <td class="r mono" style="color:${a.delta_vs_naive_pct > 0 ? 'var(--emerald)' : 'var(--muted)'}">${a.delta_vs_naive_pct > 0 ? `-${a.delta_vs_naive_pct}%` : 'baseline'}</td>
+        <td class="r mono" style="color:${idx === v.ablation.length - 1 ? 'var(--cyan)' : 'var(--ink-soft)'}">×${a.wf_mult_err.toFixed(2)}</td>
+        <td class="r mono">${a.loo_mae_log.toFixed(3)}</td>
+        <td class="r mono" style="color:${a.delta_vs_naive_pct > 0 ? 'var(--emerald)' : 'var(--muted)'}">${a.delta_vs_naive_pct > 0 ? `-${a.delta_vs_naive_pct}%` : 'base'}</td>
        </tr>`).join('')}
       </tbody>
      </table></div>
-     <div class="code-block">Temporal Walk-Forward (${v.wf_train_count} older → ${v.wf_test_count} newer by listed_at):
- Fitted Ridge + Sector EB : ×${v.wf_median_mult_err} vs Naive ×${v.wf_naive_mult_err} (-${v.wf_error_reduction_pct}% error)
-Conformal Band (LOO residuals q25=${w.conformal_q25}, q75=${w.conformal_q75}): ${v.conformal_50_coverage_pct}% verified coverage
-Farm EV Rule: 10% community pool (1.5× active weight) × token_odds − gas − 15 bps spread</div>
+     <div class="code-block">Walk-Fwd (${v.wf_train_count} older → ${v.wf_test_count} newer): ×${LIVE_WF_ERR} vs Naive ×${v.wf_naive_mult_err} (-${v.wf_error_reduction_pct}%)
+Conformal Band (q25=${w.conformal_q25}, q75=${w.conformal_q75}): ${v.conformal_50_coverage_pct}% verified LOO coverage
+Farm EV: 10% pool (1.5× active) × odds − gas − 15 bps spread</div>
     </div>
     <div class="card" style="padding:0;overflow:hidden">
      <div style="padding:11px 14px;border-bottom:1px solid var(--border)"><h2 style="margin:0">Empirical Sector Residual Factors &amp; Token Rates</h2></div>
@@ -606,9 +599,9 @@ Farm EV Rule: 10% community pool (1.5× active weight) × token_odds − gas −
      <section class="drawer-section">
       <div class="section-label"><span>Tailored 6-Step ${esc(row.category || 'DeFi')} Playbook</span><span class="mono">EV Band: Bear ${row.bear_ev_usd >= 0 ? `+$${row.bear_ev_usd.toFixed(0)}` : `-$${Math.abs(row.bear_ev_usd).toFixed(0)}`} · Base ${evStr} · Bull +$${row.bull_ev_usd.toFixed(0)}</span></div>
       <div class="farm-meta-strip">
-       <div class="farm-stat"><small>Capital</small><b>$${plan.capital}</b></div>
-       <div class="farm-stat"><small>Est. Gas</small><b>~$${plan.estGas}</b></div>
-       <div class="farm-stat"><small>Net EV</small><b style="color:${row.net_ev_usd >= 0 ? 'var(--emerald)' : 'var(--rose)'}">${evStr}</b></div>
+       <div class="farm-stat"><small>Refundable</small><b>$${plan.capital}</b></div>
+       <div class="farm-stat"><small>At-Risk Cost</small><b>~$${(plan.estGas + plan.capital * 0.0015).toFixed(1)}</b></div>
+       <div class="farm-stat"><small>Net EV (R/R)</small><b style="color:${row.net_ev_usd >= 0 ? 'var(--emerald)' : 'var(--rose)'}">${evStr} (${(row.net_ev_usd / Math.max(0.5, plan.estGas + plan.capital * 0.0015)).toFixed(1)}×)</b></div>
        <div class="farm-stat"><small>Implied Rate</small><b style="color:${row.hourly_ev_usd >= 10 ? 'var(--emerald)' : 'var(--amber)'}">$${row.hourly_ev_usd.toFixed(1)}/hr</b></div>
       </div>
       <ol class="steps-list">
