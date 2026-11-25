@@ -42,6 +42,7 @@ export interface AblationRow {
   loo_mae_log: number;
   wf_mult_err: number;
   delta_vs_naive_pct: number;
+  decision: 'BASE' | 'KEPT' | 'DROPPED';
 }
 
 export interface ValidationReport {
@@ -205,7 +206,7 @@ export interface RadarDataset {
   live: LivePeerRow[];
 }
 
-export const MODEL_VERSION = 'radar-v5-clean-oos';
+export const MODEL_VERSION = 'radar-v6-oos-selected';
 
 const DAY_MS = 86_400_000;
 const RIDGE_LAMBDA = 3.0;
@@ -413,8 +414,9 @@ export function fitValuationModel(snapshot: Snapshot): {
   }
 
   const globalTokenRate = nonExclTotal > 0 ? nonExclToken / nonExclTotal : 0.55;
-  const allCols = [0, 1, 2, 3, 4];
-  const { w, catAdj } = fitSubset(points, allCols, RIDGE_LAMBDA, true, SECTOR_SHRINKAGE_K);
+  // Active model uses [intercept, TVL, 7d flow, age] + Sector EB; Chains is tested and DROPPED on Walk-Forward.
+  const activeCols = [0, 1, 2, 3];
+  const { w, catAdj } = fitSubset(points, activeCols, RIDGE_LAMBDA, true, SECTOR_SHRINKAGE_K);
 
   // Naive baseline LOO errors
   const naiveAbs = points.map((p) => Math.abs(p.lmcap - Math.log(0.25 * p.tvl_usd)));
@@ -439,15 +441,15 @@ export function fitValuationModel(snapshot: Snapshot): {
     return Math.exp(quantile(errs, 0.5));
   };
 
-  // Term-by-term LOO + Walk-Forward ablation
-  const abSpecs: Array<{ label: string; cols: number[]; cat: boolean }> = [
-    { label: 'Power-Law TVL only', cols: [0, 1], cat: false },
-    { label: '+ Sector EB Shrinkage', cols: [0, 1], cat: true },
-    { label: '+ 7d TVL Flow + Age', cols: [0, 1, 2, 3], cat: true },
-    { label: 'Full Ridge (+ Chains)', cols: [0, 1, 2, 3, 4], cat: true },
+  // Term-by-term LOO + Walk-Forward ablation with explicit KEPT / DROPPED decisions
+  const abSpecs: Array<{ label: string; cols: number[]; cat: boolean; decision: 'KEPT' | 'DROPPED' }> = [
+    { label: 'Power-Law TVL', cols: [0, 1], cat: false, decision: 'KEPT' },
+    { label: '+ Sector EB Shrinkage', cols: [0, 1], cat: true, decision: 'KEPT' },
+    { label: '+ 7d TVL Flow + Age', cols: [0, 1, 2, 3], cat: true, decision: 'KEPT' },
+    { label: '+ Multi-Chain Count', cols: [0, 1, 2, 3, 4], cat: true, decision: 'DROPPED' },
   ];
   const ablation: AblationRow[] = [
-    { label: 'Naive 0.25 × TVL', loo_mult_err: round2(naiveMedMult), loo_mae_log: round4(naiveMae), wf_mult_err: round2(wfNaiveMult), delta_vs_naive_pct: 0 },
+    { label: 'Naive 0.25 × TVL', loo_mult_err: round2(naiveMedMult), loo_mae_log: round4(naiveMae), wf_mult_err: round2(wfNaiveMult), delta_vs_naive_pct: 0, decision: 'BASE' },
   ];
   let fullLoo = { medMult: naiveMedMult, mae: naiveMae, signedRes: [] as number[] };
   let wfMedMult = wfNaiveMult;
@@ -460,8 +462,9 @@ export function fitValuationModel(snapshot: Snapshot): {
       loo_mae_log: round4(r.mae),
       wf_mult_err: round2(wfE),
       delta_vs_naive_pct: round2(((naiveMedMult - r.medMult) / naiveMedMult) * 100),
+      decision: sp.decision,
     });
-    if (sp.cols.length === 5 && sp.cat) {
+    if (sp.cols.length === 4 && sp.cat) {
       fullLoo = r;
       wfMedMult = wfE;
     }
@@ -493,7 +496,7 @@ export function fitValuationModel(snapshot: Snapshot): {
   return {
     weights: {
       intercept: round4(w[0]!), b_tvl: round4(w[1]!), b_growth: round4(w[2]!),
-      b_age: round4(w[3]!), b_chains: round4(w[4]!),
+      b_age: round4(w[3]!), b_chains: 0,
       ridge_lambda: RIDGE_LAMBDA, sector_shrinkage_k: SECTOR_SHRINKAGE_K,
       conformal_q25: round4(q25), conformal_q75: round4(q75),
     },
